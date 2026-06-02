@@ -1,0 +1,29 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install lint tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          python -m pip install --upgrade pip
+          python -m pip install black flake8
+
+      - name: ShellCheck
+        run: shellcheck setup.sh uninstall.sh configs/20-hotspot-manager configs/90-hotspot-vpn-policy scripts/vpn-routing.sh
+
+      - name: Black check
+        run: black --check scripts/hotspot-manager.py
+
+      - name: Flake8
+        run: flake8 --max-line-length=88 --extend-ignore=E203 scripts/hotspot-manager.py

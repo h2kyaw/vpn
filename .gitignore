@@ -1,0 +1,16 @@
+# Secrets and private VPN material
+backup/
+*.ovpn
+*.key
+*.pem
+*.crt
+
+# Runtime/generated files
+__pycache__/
+*.py[cod]
+logs/
+*.log
+
+# Local editor/system files
+.DS_Store
+.env
