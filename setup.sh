@@ -55,6 +55,52 @@ ensure_line() {
   grep -qxF "$line" "$file" 2>/dev/null || echo "$line" | sudo tee -a "$file" >/dev/null
 }
 
+ensure_managed_block() {
+  local file="$1"
+  local begin="$2"
+  local end="$3"
+  local block_file="$4"
+
+  sudo touch "$file"
+  sudo sed -i "\|$begin|,\|$end|d" "$file"
+  {
+    echo "$begin"
+    cat "$block_file"
+    echo "$end"
+  } | sudo tee -a "$file" >/dev/null
+}
+
+vpn_has_ipv4() {
+  ip -4 addr show tun0 2>/dev/null | grep -q "inet "
+}
+
+vpn_profile_exists() {
+  nmcli -t -f NAME connection show 2>/dev/null | grep -qx 'pi'
+}
+
+vpn_profile_active() {
+  nmcli -t -f NAME,TYPE connection show --active 2>/dev/null | grep -qx 'pi:vpn'
+}
+
+connect_vpn_if_available() {
+  if ! vpn_profile_exists; then
+    log_warn "NetworkManager VPN connection 'pi' was not found."
+    return
+  fi
+
+  if vpn_profile_active; then
+    log_info "VPN connection 'pi' is already active"
+    sleep 3
+    return
+  fi
+
+  log_info "Connecting VPN connection: pi"
+  if ! sudo nmcli connection up pi; then
+    log_warn "Could not activate VPN connection 'pi'. Check the OpenVPN profile and credentials."
+  fi
+  sleep 3
+}
+
 render_hostapd_conf() {
   local ssid="$1"
   local password="$2"
@@ -125,10 +171,12 @@ copy_file "$CONFIG_DIR/AdGuardHome.yaml" /etc/AdGuardHome/AdGuardHome.yaml 0644
 copy_file "$CONFIG_DIR/20-hotspot-manager" /etc/NetworkManager/dispatcher.d/20-hotspot-manager 0755
 copy_file "$CONFIG_DIR/90-hotspot-vpn-policy" /etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy 0755
 
-if ! grep -q "static ip_address=10.42.0.1/24" /etc/dhcpcd.conf 2>/dev/null; then
-  awk '1' "$CONFIG_DIR/dhcpcd.conf" | sudo tee -a /etc/dhcpcd.conf >/dev/null
-fi
+log_info "Configuring dhcpcd wlan0 block"
+backup_file /etc/dhcpcd.conf
+sudo sed -i '/^# Access Point configuration for wlan0$/,/^    nohook wpa_supplicant$/d' /etc/dhcpcd.conf 2>/dev/null || true
+ensure_managed_block /etc/dhcpcd.conf "# BEGIN GoodWifi managed block" "# END GoodWifi managed block" "$CONFIG_DIR/dhcpcd.conf"
 
+backup_file /etc/default/hostapd
 echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' | sudo tee /etc/default/hostapd >/dev/null
 
 log_info "Installing AdGuardHome when missing"
@@ -182,11 +230,16 @@ sudo systemctl unmask hostapd 2>/dev/null || true
 sudo systemctl enable hostapd dnsmasq AdGuardHome
 sudo systemctl restart hostapd dnsmasq AdGuardHome
 
-if ip -4 addr show tun0 2>/dev/null | grep -q "inet "; then
+if ! vpn_has_ipv4; then
+  connect_vpn_if_available
+fi
+
+if vpn_has_ipv4; then
   log_info "tun0 is active and has an IPv4 address"
   sudo /etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy tun0 up
 else
-  log_warn "tun0 is not active yet; run: hotspot --restart-vpn"
+  log_warn "tun0 has no IPv4 address yet. If VPN 'pi' is active, confirm it creates tun0."
+  log_warn "After the VPN is healthy, reapply hotspot routing with: hotspot --restart-vpn"
 fi
 
 log_info "SETUP/APPLY COMPLETE"

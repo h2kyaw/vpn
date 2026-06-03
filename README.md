@@ -28,7 +28,8 @@ That makes the Pi itself use the VPN and can break Docker networking, DNS, SSH, 
 - `dnsmasq`: DHCP and DNS for clients, gives IPs from `10.42.0.10` to `10.42.0.100`
 - `AdGuardHome`: optional filtering/admin service, DNS on port `5353`, web UI on port `3000`
 - `NetworkManager`: manages Ethernet and OpenVPN connection `pi`
-- `configs/90-hotspot-vpn-policy`: keeps host traffic on `eth0` and routes hotspot clients through `tun0`
+- `configs/90-hotspot-vpn-policy`: keeps host traffic on `eth0` and routes hotspot clients through `tun0` using project-owned firewall chains
+- `scripts/vpn-routing.sh`: editable mirror of the installed dispatcher policy
 - `scripts/hotspot-manager.py`: status/fix CLI used by aliases
 
 ## Prerequisites
@@ -121,11 +122,10 @@ Keep the VPN from becoming the Pi host default route:
 sudo nmcli connection modify pi ipv4.never-default yes ipv6.never-default yes
 ```
 
-Connect it:
+Connect it if it is not already active:
 
 ```bash
 sudo nmcli connection up pi
-sudo /etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy tun0 up
 ```
 
 Verify:
@@ -134,6 +134,14 @@ Verify:
 nmcli -t -f NAME,TYPE,DEVICE,STATE connection show --active
 ip addr show tun0
 curl -4 -s --max-time 8 --interface tun0 https://ifconfig.me
+```
+
+The public VPN exit IP can vary by provider, account, or server pool. Treat the `curl --interface tun0` result as the current active exit IP, not as a value that must match this README.
+
+Apply the hotspot routing policy after `tun0` has an IPv4 address:
+
+```bash
+sudo /etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy tun0 up
 ```
 
 Private OpenVPN files must not be committed. This repo ignores `backup/`, `*.ovpn`, `*.key`, `*.pem`, and `*.crt`.
@@ -204,7 +212,7 @@ SERVICES:
 VPN:
   ✅ Connected: True
     Tunnel IP: 10.8.0.2
-    VPS IP: 5.183.9.86
+    VPN Exit IP: <public VPN IP>
 
 HOTSPOT:
   ✅ SSID: GoodWifi
@@ -332,30 +340,33 @@ Expected:
 -A POSTROUTING -s 10.42.0.0/24 -o tun0 -j MASQUERADE
 ```
 
-Forward rules should include:
+Forward rules should jump through the project-owned chain:
 
 ```bash
-sudo iptables -S FORWARD | grep -E 'wlan0|tun0|eth0|^-P'
+sudo iptables -S FORWARD
+sudo iptables -S GOODWIFI_FORWARD
 ```
 
 Expected:
 
 ```text
--P FORWARD ACCEPT
--A FORWARD -s 10.42.0.0/24 -i wlan0 -o tun0 -j ACCEPT
--A FORWARD -d 10.42.0.0/24 -i tun0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+-A FORWARD -j GOODWIFI_FORWARD
+-A GOODWIFI_FORWARD -s 10.42.0.0/24 -i wlan0 -o tun0 -j ACCEPT
+-A GOODWIFI_FORWARD -d 10.42.0.0/24 -i tun0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 ```
 
 IPv6 forwarding from hotspot clients is blocked to prevent VPN leaks:
 
 ```bash
-sudo ip6tables -S FORWARD | grep wlan0
+sudo ip6tables -S FORWARD
+sudo ip6tables -S GOODWIFI6_FORWARD
 ```
 
 Expected:
 
 ```text
--A FORWARD -i wlan0 -j DROP
+-A FORWARD -j GOODWIFI6_FORWARD
+-A GOODWIFI6_FORWARD -i wlan0 -j DROP
 ```
 
 ## Why Devices Show "Connected / No Internet Access"
@@ -447,10 +458,11 @@ Check VPN egress IP:
 curl -4 -s --max-time 8 --interface tun0 https://ifconfig.me
 ```
 
-Expected VPS IP:
+This prints the current public VPN exit IP for the active tunnel. It can change when the OpenVPN profile, provider server, or account changes.
 
-```text
-5.183.9.86
+```bash
+nmcli -t -f NAME,TYPE,DEVICE,STATE connection show --active
+ip -4 addr show tun0
 ```
 
 Check active/reachable clients:
@@ -490,7 +502,8 @@ If still broken, verify route/NAT:
 ip route get 1.1.1.1
 ip route get 1.1.1.1 from 10.42.0.83 iif wlan0
 sudo iptables -t nat -S POSTROUTING | grep -E 'tun0|eth0|10.42'
-sudo iptables -S FORWARD | grep -E 'wlan0|tun0|eth0|^-P'
+sudo iptables -S FORWARD
+sudo iptables -S GOODWIFI_FORWARD
 ```
 
 Only run setup after source config changed or if the installed files are damaged:

@@ -10,6 +10,8 @@ RULE_PRIORITY="1000"
 HOST_RULE_PRIORITY="999"
 FWMARK="100"
 VPN_IPSET="vpn_domains"
+IPTABLES_CHAIN="GOODWIFI_FORWARD"
+IP6TABLES_CHAIN="GOODWIFI6_FORWARD"
 
 remove_rule() {
     table="$1"
@@ -30,6 +32,34 @@ remove_ip6_rule() {
     while ip6tables -C "$@" 2>/dev/null; do
         ip6tables -D "$@"
     done
+}
+
+ensure_filter_chain() {
+    chain="$1"
+    iptables -N "$chain" 2>/dev/null || true
+    iptables -F "$chain"
+    iptables -C FORWARD -j "$chain" 2>/dev/null || iptables -I FORWARD 1 -j "$chain"
+}
+
+remove_filter_chain() {
+    chain="$1"
+    remove_rule filter FORWARD -j "$chain"
+    iptables -F "$chain" 2>/dev/null || true
+    iptables -X "$chain" 2>/dev/null || true
+}
+
+ensure_ip6_filter_chain() {
+    chain="$1"
+    ip6tables -N "$chain" 2>/dev/null || true
+    ip6tables -F "$chain"
+    ip6tables -C FORWARD -j "$chain" 2>/dev/null || ip6tables -I FORWARD 1 -j "$chain"
+}
+
+remove_ip6_filter_chain() {
+    chain="$1"
+    remove_ip6_rule FORWARD -j "$chain"
+    ip6tables -F "$chain" 2>/dev/null || true
+    ip6tables -X "$chain" 2>/dev/null || true
 }
 
 detect_lan_gw() {
@@ -57,11 +87,10 @@ apply_policy() {
     LAN_GW="$(detect_lan_gw | awk 'NF {print; exit}')"
 
     echo 1 > /proc/sys/net/ipv4/ip_forward
-    iptables -P FORWARD ACCEPT
     ipset create "$VPN_IPSET" hash:ip 2>/dev/null || true
+    ensure_filter_chain "$IPTABLES_CHAIN"
+    ensure_ip6_filter_chain "$IP6TABLES_CHAIN"
 
-    remove_rule nat POSTROUTING -o "$VPN_IF" -j MASQUERADE
-    remove_rule nat POSTROUTING -o "$LAN_IF" -j MASQUERADE
     remove_rule mangle OUTPUT -m set --match-set "$VPN_IPSET" dst -j MARK --set-mark "$FWMARK"
     remove_rule filter FORWARD -i wlan0 -o "$VPN_IF" -s "$HOTSPOT_SUBNET" -j ACCEPT
     remove_rule filter FORWARD -i "$VPN_IF" -o wlan0 -d "$HOTSPOT_SUBNET" -m state --state RELATED,ESTABLISHED -j ACCEPT
@@ -84,12 +113,14 @@ apply_policy() {
 
     iptables -t nat -C POSTROUTING -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -j MASQUERADE 2>/dev/null || \
         iptables -t nat -A POSTROUTING -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -j MASQUERADE
-    iptables -t mangle -A OUTPUT -m set --match-set "$VPN_IPSET" dst -j MARK --set-mark "$FWMARK"
-    iptables -I FORWARD 1 -i "$VPN_IF" -o wlan0 -d "$HOTSPOT_SUBNET" -m state --state RELATED,ESTABLISHED -j ACCEPT
-    iptables -I FORWARD 1 -i wlan0 -o "$VPN_IF" -s "$HOTSPOT_SUBNET" -j ACCEPT
+    iptables -t mangle -C OUTPUT -m set --match-set "$VPN_IPSET" dst -j MARK --set-mark "$FWMARK" 2>/dev/null || \
+        iptables -t mangle -A OUTPUT -m set --match-set "$VPN_IPSET" dst -j MARK --set-mark "$FWMARK"
+    iptables -A "$IPTABLES_CHAIN" -i wlan0 -o "$VPN_IF" -s "$HOTSPOT_SUBNET" -j ACCEPT
+    iptables -A "$IPTABLES_CHAIN" -i "$VPN_IF" -o wlan0 -d "$HOTSPOT_SUBNET" -m state --state RELATED,ESTABLISHED -j ACCEPT
     remove_rule mangle FORWARD -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1200
     remove_rule mangle FORWARD -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
-    iptables -t mangle -A FORWARD -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+    iptables -t mangle -C FORWARD -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+        iptables -t mangle -A FORWARD -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 
     iptables -C INPUT -i wlan0 -p udp --dport 67:68 -j ACCEPT 2>/dev/null || \
         iptables -A INPUT -i wlan0 -p udp --dport 67:68 -j ACCEPT
@@ -98,13 +129,11 @@ apply_policy() {
     iptables -C INPUT -i wlan0 -p udp --dport 53 -j ACCEPT 2>/dev/null || \
         iptables -A INPUT -i wlan0 -p udp --dport 53 -j ACCEPT
 
-    ip6tables -C FORWARD -i wlan0 -j DROP 2>/dev/null || \
-        ip6tables -I FORWARD 1 -i wlan0 -j DROP
+    ip6tables -A "$IP6TABLES_CHAIN" -i wlan0 -j DROP
 }
 
 cleanup_policy() {
     remove_rule nat POSTROUTING -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -j MASQUERADE
-    remove_rule nat POSTROUTING -o "$VPN_IF" -j MASQUERADE
     remove_rule mangle OUTPUT -m set --match-set "$VPN_IPSET" dst -j MARK --set-mark "$FWMARK"
     remove_rule mangle FORWARD -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1200
     remove_rule mangle FORWARD -s "$HOTSPOT_SUBNET" -o "$VPN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
@@ -113,6 +142,8 @@ cleanup_policy() {
     remove_rule filter FORWARD -i wlan0 -o "$LAN_IF" -j ACCEPT
     remove_rule filter FORWARD -i "$LAN_IF" -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
     remove_ip6_rule FORWARD -i wlan0 -j DROP
+    remove_filter_chain "$IPTABLES_CHAIN"
+    remove_ip6_filter_chain "$IP6TABLES_CHAIN"
     remove_rule filter INPUT -i wlan0 -p udp --dport 67:68 -j ACCEPT
     remove_rule filter INPUT -i wlan0 -p tcp --dport 53 -j ACCEPT
     remove_rule filter INPUT -i wlan0 -p udp --dport 53 -j ACCEPT

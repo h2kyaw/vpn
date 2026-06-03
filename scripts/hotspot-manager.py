@@ -9,14 +9,56 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from typing import Optional, Sequence, TypedDict
 
-CONFIG = {
+
+class Config(TypedDict):
+    services: list[str]
+    vpn_name: str
+    default_hotspot_ssid: str
+    hostapd_conf: str
+    hotspot_ip: str
+    interface_wlan: str
+    log_file: str
+    ping_target: str
+
+
+class PingStatus(TypedDict):
+    ok: bool
+    target: str
+    summary: str
+    rtt: str
+    loss: str
+    avg_ms: str
+
+
+class VpnStatus(TypedDict):
+    connected: bool
+    ip: Optional[str]
+    external_ip: Optional[str]
+    external_ok: bool
+
+
+class HotspotInfo(TypedDict):
+    broadcasting: bool
+    clients: int
+
+
+class HotspotStatus(TypedDict):
+    services: dict[str, bool]
+    vpn: VpnStatus
+    hotspot: HotspotInfo
+    dns_working: bool
+    internet: bool
+    ping: PingStatus
+
+
+CONFIG: Config = {
     "services": ["hostapd", "dnsmasq", "AdGuardHome"],
     "vpn_name": "pi",
     "default_hotspot_ssid": "GoodWifi",
     "hostapd_conf": "/etc/hostapd/hostapd.conf",
     "hotspot_ip": "10.42.0.1",
-    "vpn_expected_ip": "5.183.9.86",
     "interface_wlan": "wlan0",
     "log_file": "/var/log/hotspot-manager.log",
     "ping_target": "8.8.8.8",
@@ -31,7 +73,7 @@ class Colors:
     RESET = "\033[0m"
 
 
-def log(msg, level="INFO"):
+def log(msg: str, level: str = "INFO") -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with open(CONFIG["log_file"], "a") as f:
@@ -41,17 +83,7 @@ def log(msg, level="INFO"):
     print(msg)
 
 
-def run(cmd):
-    try:
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=30
-        )
-        return result.returncode == 0, result.stdout.strip(), result.stderr.strip()
-    except Exception:
-        return False, "", ""
-
-
-def run_args(cmd):
+def run_args(cmd: Sequence[str]) -> tuple[bool, str, str]:
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=30, check=False
@@ -61,12 +93,12 @@ def run_args(cmd):
         return False, "", ""
 
 
-def check_service(service):
-    ok, out, _ = run(f"systemctl is-active {service}")
+def check_service(service: str) -> bool:
+    ok, out, _ = run_args(["systemctl", "is-active", service])
     return ok and out == "active"
 
 
-def check_vpn():
+def check_vpn() -> bool:
     ok, out, _ = run_args(["ip", "-4", "addr", "show", "tun0"])
     if ok and "inet " in out:
         return True
@@ -88,33 +120,48 @@ def check_vpn():
     return False
 
 
-def check_vpn_ip():
-    ok, out, _ = run("ip -4 -o addr show tun0 | awk '{print $4}' | cut -d/ -f1")
+def check_vpn_ip() -> tuple[bool, str]:
+    ok, out, _ = run_args(["ip", "-4", "-o", "addr", "show", "tun0"])
+    if ok:
+        for line in out.splitlines():
+            parts = line.split()
+            if "inet" in parts:
+                cidr = parts[parts.index("inet") + 1]
+                return True, cidr.split("/", 1)[0]
+    return False, "None"
+
+
+def check_vpn_external_ip() -> tuple[bool, str]:
+    ok, out, _ = run_args(
+        [
+            "curl",
+            "-4",
+            "-s",
+            "--max-time",
+            "8",
+            "--interface",
+            "tun0",
+            "https://ifconfig.me",
+        ]
+    )
     if ok and out:
         return True, out
     return False, "None"
 
 
-def check_vpn_external_ip():
-    ok, out, _ = run("curl -4 -s --max-time 8 --interface tun0 https://ifconfig.me")
-    if ok and out:
-        return True, out
-    return False, "None"
-
-
-def check_internet():
-    ok, _, _ = run("ping -c 2 -W 3 8.8.8.8 >/dev/null 2>&1")
+def check_internet() -> bool:
+    ok, _, _ = run_args(["ping", "-c", "2", "-W", "3", CONFIG["ping_target"]])
     return ok
 
 
-def check_dns():
-    ok, _, _ = run(f"nslookup google.com {CONFIG['hotspot_ip']} >/dev/null 2>&1")
+def check_dns() -> bool:
+    ok, _, _ = run_args(["nslookup", "google.com", CONFIG["hotspot_ip"]])
     return ok
 
 
-def check_ping(target=None):
+def check_ping(target: Optional[str] = None) -> PingStatus:
     target = target or CONFIG["ping_target"]
-    ok, out, _ = run(f"ping -c 3 -W 2 {target}")
+    ok, out, _ = run_args(["ping", "-c", "3", "-W", "2", target])
     packet_line = "No ping result"
     rtt_line = ""
     for line in out.splitlines():
@@ -137,25 +184,20 @@ def check_ping(target=None):
     }
 
 
-def check_clients():
+def check_clients() -> int:
     wlan = CONFIG["interface_wlan"]
-    ok, out, _ = run(f"iw dev {wlan} station dump 2>/dev/null | grep -c 'Station'")
-    if ok and out:
-        try:
-            return int(out)
-        except ValueError:
-            return 0
+    ok, out, _ = run_args(["iw", "dev", wlan, "station", "dump"])
+    if ok:
+        return sum(1 for line in out.splitlines() if line.startswith("Station "))
     return 0
 
 
-def check_hotspot():
-    ok, _, _ = run(
-        f"iw dev {CONFIG['interface_wlan']} info 2>/dev/null | grep -q 'type AP'"
-    )
-    return ok
+def check_hotspot() -> bool:
+    ok, out, _ = run_args(["iw", "dev", CONFIG["interface_wlan"], "info"])
+    return ok and any(line.strip() == "type AP" for line in out.splitlines())
 
 
-def get_hotspot_ssid():
+def get_hotspot_ssid() -> str:
     try:
         with open(CONFIG["hostapd_conf"]) as conf:
             for line in conf:
@@ -166,32 +208,48 @@ def get_hotspot_ssid():
     return CONFIG["default_hotspot_ssid"]
 
 
-def restart_vpn():
+def restart_vpn() -> bool:
     if check_vpn():
         log("VPN already connected")
-        run("sudo /etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy tun0 up")
+        run_args(
+            [
+                "sudo",
+                "/etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy",
+                "tun0",
+                "up",
+            ]
+        )
         return True
     log("VPN not connected, connecting...")
-    run(f"sudo nmcli connection down {CONFIG['vpn_name']} 2>/dev/null")
+    run_args(["sudo", "nmcli", "connection", "down", CONFIG["vpn_name"]])
     time.sleep(2)
-    ok, _, _ = run(f"sudo nmcli connection up {CONFIG['vpn_name']}")
+    ok, _, _ = run_args(["sudo", "nmcli", "connection", "up", CONFIG["vpn_name"]])
     if ok:
         log("VPN connected", "SUCCESS")
         time.sleep(3)
-        run("sudo /etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy tun0 up")
+        run_args(
+            [
+                "sudo",
+                "/etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy",
+                "tun0",
+                "up",
+            ]
+        )
     return ok
 
 
-def fix_hotspot():
+def fix_hotspot() -> bool:
     log("Restarting hotspot services...")
-    run("sudo systemctl restart hostapd dnsmasq AdGuardHome")
+    run_args(["sudo", "systemctl", "restart", "hostapd", "dnsmasq", "AdGuardHome"])
     time.sleep(2)
     vpn_ok = restart_vpn()
-    run("sudo /etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy tun0 up")
+    run_args(
+        ["sudo", "/etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy", "tun0", "up"]
+    )
     return vpn_ok
 
 
-def get_status():
+def get_status() -> HotspotStatus:
     clients = check_clients()
     vpn_connected = check_vpn()
     _vpn_ip_ok, vpn_ip = check_vpn_ip() if vpn_connected else (False, None)
@@ -214,7 +272,7 @@ def get_status():
     }
 
 
-def print_status(status):
+def print_status(status: HotspotStatus) -> None:
     print("\n" + "=" * 55)
     print(f"{Colors.BOLD}   HOTSPOT STATUS{Colors.RESET}")
     print("=" * 55)
@@ -230,7 +288,7 @@ def print_status(status):
     if status["vpn"].get("ip"):
         print(f"    Tunnel IP: {status['vpn']['ip']}")
     if status["vpn"].get("external_ip"):
-        print(f"    VPS IP: {status['vpn']['external_ip']}")
+        print(f"    VPN Exit IP: {status['vpn']['external_ip']}")
 
     print(f"\n{Colors.BOLD}HOTSPOT:{Colors.RESET}")
     icon = "✅" if status["hotspot"]["broadcasting"] else "❌"
@@ -256,7 +314,7 @@ def print_status(status):
     print("=" * 55 + "\n")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("-s", "--status", action="store_true")
     parser.add_argument("-r", "--restart", action="store_true")

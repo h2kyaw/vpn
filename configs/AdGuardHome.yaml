@@ -2,7 +2,8 @@ http:
   address: 0.0.0.0:3000
 dns:
   bind_hosts:
-    - 0.0.0.0
+    - 127.0.0.1
+    - 10.42.0.1
   port: 5353
   upstream_dns:
     - 8.8.8.8
