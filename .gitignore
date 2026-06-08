@@ -1,40 +1,43 @@
-```
-# Configuration backups and temporary files
-*.bak
-*.tmp
-*.backup
-*~
-
-# Logs
-*.log
-
-# Environment files
+# Environment
 .env
 .env.local
-.env.*
+*.env.*
 
-# OS generated files
-.DS_Store
-Thumbs.db
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
-# Editor/IDE files
+# Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Build artifacts (if any)
+# Dependencies
+node_modules/
+venv/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+
+# Build artifacts
 dist/
 build/
 target/
-
-# Dependencies (if any)
-node_modules/
-__pycache__/
 *.pyc
-*.pyo
-*.pyd
-.Python
+*.class
+*.o
+*.exe
+*.dll
 *.so
-*.egg-info/
-```
+*.a
+*.obj
+*.out
+
+# System files
+.DS_Store
+Thumbs.db
+coverage/
+htmlcov/
+.coverage
+.gradle/
