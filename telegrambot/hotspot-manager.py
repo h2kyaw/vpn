@@ -94,8 +94,29 @@ def run_args(cmd: Sequence[str]) -> tuple[bool, str, str]:
 
 
 def check_service(service: str) -> bool:
+    # Try systemctl first (works on host, fails in Docker chroot)
     ok, out, _ = run_args(["systemctl", "is-active", service])
-    return ok and out == "active"
+    if ok and out == "active":
+        return True
+    
+    # Fallback: Check if process is running using pgrep (works in Docker with host PID)
+    ok, out, _ = run_args(["pgrep", "-x", service])
+    if ok and out.strip():
+        return True
+    
+    # Additional fallback for dnsmasq (might run as dnsmasq not exact match)
+    if service == "dnsmasq":
+        ok, out, _ = run_args(["pgrep", "-f", "dnsmasq"])
+        if ok and out.strip():
+            return True
+    
+    # Additional fallback for hostapd
+    if service == "hostapd":
+        ok, out, _ = run_args(["pgrep", "-f", "hostapd"])
+        if ok and out.strip():
+            return True
+    
+    return False
 
 
 def check_vpn() -> bool:
