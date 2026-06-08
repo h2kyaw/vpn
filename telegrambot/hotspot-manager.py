@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Optional, Sequence, TypedDict
+from typing import Optional, Sequence, TypedDict, List
 
 
 class Config(TypedDict):
@@ -334,7 +334,7 @@ def print_status(status: HotspotStatus, telegram_format: bool = False, html_form
             return f"<b>{text}</b>"
         return f"*{text}*" if telegram_format else text
 
-    lines = []
+    lines: List[str] = []
     
     # Header - Clean UI without ASCII borders for Telegram
     if telegram_format or html_format:
@@ -365,7 +365,7 @@ def print_status(status: HotspotStatus, telegram_format: bool = False, html_form
         lines.append(fmt_bold("🔒 VPN:"))
     else:
         lines.append(f"\n{Colors.BOLD}VPN:{Colors.RESET}")
-        
+
     icon = "✅" if status["vpn"]["connected"] else "❌"
     if telegram_format or html_format:
         lines.append(f"{icon} Connected: {fmt_code(str(status['vpn']['connected']))}")
@@ -373,18 +373,25 @@ def print_status(status: HotspotStatus, telegram_format: bool = False, html_form
         lines.append(f"  {icon} Connected: {status['vpn']['connected']}")
         
     if status["vpn"].get("ip"):
-        ip_text = fmt_spoiler_code(status['vpn']['ip'])
-        if telegram_format or html_format:
-            lines.append(f"  • Tunnel IP: {ip_text}")
-        else:
-            lines.append(f"    Tunnel IP: {ip_text}")
-            
+        # ip သည် None မဟုတ်ကြောင်း အထက်တွင် စစ်ထားပြီးဖြစ်သော်လည်း 
+        # Pylance အတွက် variable တစ်ခုခွဲထုတ်ပြီး type narrowing လုပ်ပေးပါမည်
+        vpn_ip = status["vpn"]["ip"]
+        if vpn_ip:
+            ip_text = fmt_spoiler_code(vpn_ip)
+            if telegram_format or html_format:
+                lines.append(f"  • Tunnel IP: {ip_text}")
+            else:
+                lines.append(f"    Tunnel IP: {ip_text}")
+
     if status["vpn"].get("external_ip"):
-        exit_text = fmt_spoiler_code(status['vpn']['external_ip'])
-        if telegram_format or html_format:
-            lines.append(f"  • VPN Exit IP: {exit_text}")
-        else:
-            lines.append(f"    VPN Exit IP: {exit_text}")
+        # external_ip အတွက်လည်း အလားတူ လုပ်ဆောင်ပါမည်
+        ext_ip = status["vpn"]["external_ip"]
+        if ext_ip:
+            exit_text = fmt_spoiler_code(ext_ip)
+            if telegram_format or html_format:
+                lines.append(f"  • VPN Exit IP: {exit_text}")
+            else:
+                lines.append(f"    VPN Exit IP: {exit_text}")
 
     # Hotspot Section
     if telegram_format or html_format:
