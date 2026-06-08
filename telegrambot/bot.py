@@ -35,7 +35,7 @@ def run_hotspot_command(args):
         return "", str(e), -1
 
 async def get_status_text():
-    stdout, stderr, code = run_hotspot_command(["--status", "--telegram"])
+    stdout, stderr, code = run_hotspot_command(["--status", "--html"])
     if code != 0 and not stdout:
         return f"Error getting status:\n{stderr}"
     return stdout
