@@ -69,7 +69,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     status_text = await get_status_text()
     
-    keyboard = [[InlineKeyboardButton("🔄 Refresh", callback_data="refresh_status")]]
+    keyboard = [[InlineKeyboardButton("Refresh", callback_data="refresh_status", icon_custom_emoji_id="6057439501377085156")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     # Check if content has changed (to avoid "Message is not modified" error)
