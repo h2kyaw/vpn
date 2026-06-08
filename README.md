@@ -9,9 +9,8 @@ Traffic is intentionally split:
 - GoodWifi clients: `10.42.0.0/24 -> tun0 -> VPN/VPS`
 - Pi host services: `eth0 -> <LAN gateway> -> ISP router`
 - Docker workloads: not forced through VPN by default
-- DNS for GoodWifi clients: `10.42.0.1:53` handled by dnsmasq
+- DNS for GoodWifi clients: `10.42.0.1:53` handled by dnsmasq with upstream DNS to Google (8.8.8.8, 8.8.4.4)
 - DHCP for GoodWifi clients: handled by dnsmasq on `wlan0`
-- AdGuard Home: installed separately, web UI on `:3000`, DNS on `:5353`
 
 Do not install scripts that run:
 
@@ -25,8 +24,7 @@ That makes the Pi itself use the VPN and can break Docker networking, DNS, SSH, 
 ## Components
 
 - `hostapd`: broadcasts `GoodWifi` on `wlan0`
-- `dnsmasq`: DHCP and DNS for clients, gives IPs from `10.42.0.10` to `10.42.0.100`
-- `AdGuardHome`: optional filtering/admin service, DNS on port `5353`, web UI on port `3000`
+- `dnsmasq`: DHCP and DNS for clients, gives IPs from `10.42.0.10` to `10.42.0.100`, upstream DNS to Google (8.8.8.8, 8.8.4.4)
 - `NetworkManager`: manages Ethernet and OpenVPN connection `pi`
 - `configs/90-hotspot-vpn-policy`: keeps host traffic on `eth0` and routes hotspot clients through `tun0` using project-owned firewall chains
 - `scripts/vpn-routing.sh`: editable mirror of the installed dispatcher policy
@@ -71,7 +69,6 @@ vpn/
 │   ├── hostapd.conf
 │   ├── hostapd-override.conf
 │   ├── dnsmasq.conf
-│   ├── AdGuardHome.yaml
 │   ├── NetworkManager.conf
 │   ├── dhcpcd.conf
 │   ├── 20-hotspot-manager
@@ -87,7 +84,6 @@ Installed live files:
 /etc/hostapd/hostapd.conf
 /etc/systemd/system/hostapd.service.d/override.conf
 /etc/dnsmasq.conf
-/etc/AdGuardHome/AdGuardHome.yaml
 /etc/NetworkManager/dispatcher.d/20-hotspot-manager
 /etc/NetworkManager/dispatcher.d/90-hotspot-vpn-policy
 /usr/local/bin/hotspot-manager.py
@@ -171,7 +167,7 @@ HOTSPOT_SSID="MyWifi" HOTSPOT_PASSWORD="change-this-password" ./setup.sh
 For a live-only quick test, edit `/etc/hostapd/hostapd.conf` and restart:
 
 ```bash
-sudo systemctl restart hostapd dnsmasq AdGuardHome
+sudo systemctl restart hostapd dnsmasq
 ```
 
 Source files are preferred so the next setup run preserves your changes.
@@ -207,7 +203,6 @@ Expected healthy output includes:
 SERVICES:
   ✅ hostapd      Running
   ✅ dnsmasq      Running
-  ✅ AdGuardHome  Running
 
 VPN:
   ✅ Connected: True
