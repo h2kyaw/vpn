@@ -1,278 +1,138 @@
-#!/usr/bin/env python3
-"""
-Telegram Bot for Raspberry Pi Hotspot Control
-Controls hotspot-manager.py via Telegram commands
-"""
-
 import os
-import subprocess
+import sys
+import time
 import logging
+import subprocess
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-# Logging setup
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+# Configuration
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ALLOWED_USERS = os.getenv("TELEGRAM_ALLOWED_USERS", "")
+ALLOWED_USER_IDS = [int(uid.strip()) for uid in ALLOWED_USERS.split(",") if uid.strip().isdigit()] if ALLOWED_USERS else []
+
+SCRIPT_PATH = "/home/hhk/Projects/vpn/hotspot-manager.py"
+
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Allowed user IDs (optional security measure)
-ALLOWED_USERS = os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")
+def check_authorization(user_id):
+    if not ALLOWED_USER_IDS:
+        return True # Allow all if no list provided
+    return user_id in ALLOWED_USER_IDS
 
-
-def is_authorized(user_id: int) -> bool:
-    """Check if user is authorized to use the bot."""
-    if not ALLOWED_USERS or ALLOWED_USERS == [""]:
-        return True  # No restriction if not configured
-    return str(user_id) in ALLOWED_USERS
-
-
-def run_hotspot_command(args: list[str]) -> tuple[bool, str]:
-    """Run hotspot-manager.py command and return result."""
-    cmd = ["sudo", "/usr/local/bin/hotspot-manager.py"] + args
+def run_hotspot_command(args):
+    """Run hotspot-manager.py with sudo"""
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=60, check=False
-        )
-        output = result.stdout.strip()
-        if result.stderr:
-            output += "\n" + result.stderr.strip()
-        return result.returncode == 0, output
-    except subprocess.TimeoutExpired:
-        return False, "Command timed out"
+        cmd = ["sudo", "python3", SCRIPT_PATH] + args
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        return result.stdout, result.stderr, result.returncode
     except Exception as e:
-        return False, f"Error: {str(e)}"
+        return "", str(e), -1
 
+async def get_status_text():
+    stdout, stderr, code = run_hotspot_command(["--status"])
+    if code != 0 and not stdout:
+        return f"Error getting status:\n{stderr}"
+    return stdout
 
-def format_status_message(status_output: str) -> str:
-    """Format status output for Telegram message."""
-    # Remove ANSI color codes
-    import re
-
-    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-    clean_output = ansi_escape.sub("", status_output)
-    return f"```\n{clean_output}\n```"
-
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send welcome message."""
-    if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("⛔ You are not authorized to use this bot.")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_authorization(update.effective_user.id):
+        await update.message.reply_text("Unauthorized access.")
         return
+    await update.message.reply_text("Welcome! Use commands like: status, restart, fix, clients")
 
-    welcome_text = """
-👋 Welcome to Raspberry Pi Hotspot Control Bot!
-
-Available commands:
-/status - Check hotspot status
-/restart - Restart hotspot services
-/restart_vpn - Restart VPN connection
-/fix - Fix hotspot issues
-/clients - Show connected clients
-/help - Show this help message
-
-Use /status with the refresh button to update status without new messages.
-    """
-    await update.message.reply_text(welcome_text)
-
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show help message."""
-    if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("⛔ You are not authorized to use this bot.")
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_authorization(update.effective_user.id):
         return
-
-    await start(update, context)
-
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Get hotspot status with refresh button."""
-    if not is_authorized(update.effective_user.id):
-        if update.callback_query:
-            await update.callback_query.answer("⛔ Not authorized", show_alert=True)
-            return
-        await update.message.reply_text("⛔ You are not authorized to use this bot.")
-        return
-
-    # Run status command
-    success, output = run_hotspot_command(["--status"])
-
-    if not success:
-        message_text = f"❌ Error getting status:\n```\n{output}\n```"
-    else:
-        message_text = format_status_message(output)
-
-    # Create keyboard with refresh button
+    
+    status_text = await get_status_text()
+    
     keyboard = [[InlineKeyboardButton("🔄 Refresh", callback_data="refresh_status")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
-        # Edit existing message
+        # Edit existing message if triggered by callback
         try:
-            await update.callback_query.edit_message_text(
-                text=message_text,
-                parse_mode="Markdown",
-                reply_markup=reply_markup,
-            )
-            await update.callback_query.answer("Status updated ✅")
+            await update.callback_query.edit_message_text(text=status_text, reply_markup=reply_markup)
+            await update.callback_query.answer()
         except Exception as e:
-            logger.error(f"Error editing message: {e}")
-            # If edit fails (message too old), send new message
-            await context.bot.send_message(
-                chat_id=update.callback_query.message.chat_id,
-                text=message_text,
-                parse_mode="Markdown",
-                reply_markup=reply_markup,
-            )
+            logger.warning(f"Could not edit message: {e}")
+            await update.callback_query.message.reply_text(text=status_text, reply_markup=reply_markup)
     else:
-        # Send new message
-        await update.message.reply_text(
-            text=message_text,
-            parse_mode="Markdown",
-            reply_markup=reply_markup,
-        )
+        # Send new message if triggered by command
+        await update.message.reply_text(text=status_text, reply_markup=reply_markup)
 
+async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Refreshing...")
+    await status_command(update, context) # Re-use status logic to edit message
 
-async def refresh_status_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Handle refresh button callback."""
-    await status(update, context)
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_authorization(update.effective_user.id): return
+    msg = await update.message.reply_text("Restarting Hotspot...")
+    stdout, stderr, code = run_hotspot_command(["--restart"])
+    response = stdout if stdout else stderr
+    await msg.edit_text(f"Restart Result:\n{response}")
 
+async def restart_vpn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_authorization(update.effective_user.id): return
+    msg = await update.message.reply_text("Restarting VPN...")
+    stdout, stderr, code = run_hotspot_command(["--restart-vpn"])
+    response = stdout if stdout else stderr
+    await msg.edit_text(f"VPN Restart Result:\n{response}")
 
-async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Restart hotspot services."""
-    if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("⛔ You are not authorized to use this bot.")
-        return
+async def fix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_authorization(update.effective_user.id): return
+    msg = await update.message.reply_text("Fixing issues...")
+    stdout, stderr, code = run_hotspot_command(["--fix"])
+    response = stdout if stdout else stderr
+    await msg.edit_text(f"Fix Result:\n{response}")
 
-    await update.message.reply_text("🔄 Restarting hotspot services...")
-    success, output = run_hotspot_command(["--restart"])
+async def clients_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_authorization(update.effective_user.id): return
+    stdout, stderr, code = run_hotspot_command(["--clients"])
+    response = stdout if stdout else stderr
+    await update.message.reply_text(f"Connected Clients:\n{response}")
 
-    if success:
-        response = "✅ Hotspot services restarted successfully!\n\n"
-        # Get status after restart
-        _, status_output = run_hotspot_command(["--status"])
-        response += format_status_message(status_output)
-    else:
-        response = f"❌ Error restarting services:\n```\n{output}\n```"
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle commands without slash (e.g., 'status' instead of '/status')"""
+    if not check_authorization(update.effective_user.id): return
+    
+    text = update.message.text.strip().lower()
+    if text == "status":
+        await status_command(update, context)
+    elif text == "restart":
+        await restart_command(update, context)
+    elif text == "restart_vpn":
+        await restart_vpn_command(update, context)
+    elif text == "fix":
+        await fix_command(update, context)
+    elif text == "clients":
+        await clients_command(update, context)
 
-    keyboard = [[InlineKeyboardButton("🔄 Refresh Status", callback_data="refresh_status")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+def main():
+    if not BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables!")
+        sys.exit(1)
 
-    await update.message.reply_text(
-        text=response, parse_mode="Markdown", reply_markup=reply_markup
-    )
+    app = Application.builder().token(BOT_TOKEN).build()
 
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("restart", restart_command))
+    app.add_handler(CommandHandler("restart_vpn", restart_vpn_command))
+    app.add_handler(CommandHandler("fix", fix_command))
+    app.add_handler(CommandHandler("clients", clients_command))
+    
+    # Callback for Refresh button
+    app.add_handler(CallbackQueryHandler(refresh_callback, pattern="^refresh_status$"))
+    
+    # Handle text messages as commands (No slash)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-async def restart_vpn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Restart VPN connection."""
-    if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("⛔ You are not authorized to use this bot.")
-        return
-
-    await update.message.reply_text("🔄 Restarting VPN connection...")
-    success, output = run_hotspot_command(["--restart-vpn"])
-
-    if success:
-        response = "✅ VPN connection restarted successfully!"
-    else:
-        response = f"❌ Error restarting VPN:\n```\n{output}\n```"
-
-    keyboard = [[InlineKeyboardButton("🔄 Refresh Status", callback_data="refresh_status")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        text=response, parse_mode="Markdown", reply_markup=reply_markup
-    )
-
-
-async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fix hotspot issues."""
-    if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("⛔ You are not authorized to use this bot.")
-        return
-
-    await update.message.reply_text("🔧 Fixing hotspot issues...")
-    success, output = run_hotspot_command(["--fix"])
-
-    if success:
-        response = "✅ Hotspot fixed successfully!\n\n"
-        response += format_status_message(output)
-    else:
-        response = f"❌ Error fixing hotspot:\n```\n{output}\n```"
-
-    keyboard = [[InlineKeyboardButton("🔄 Refresh Status", callback_data="refresh_status")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        text=response, parse_mode="Markdown", reply_markup=reply_markup
-    )
-
-
-async def clients(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show connected clients."""
-    if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("⛔ You are not authorized to use this bot.")
-        return
-
-    success, output = run_hotspot_command(["--clients"])
-
-    if success:
-        response = f"📱 Connected Clients:\n```\n{output}\n```"
-    else:
-        response = f"❌ Error getting clients:\n```\n{output}\n```"
-
-    keyboard = [[InlineKeyboardButton("🔄 Refresh Status", callback_data="refresh_status")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        text=response, parse_mode="Markdown", reply_markup=reply_markup
-    )
-
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log errors."""
-    logger.error(f"Update {update} caused error: {context.error}")
-
-
-def main() -> None:
-    """Start the bot."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        logger.error("TELEGRAM_BOT_TOKEN environment variable not set!")
-        return
-
-    # Create application
-    application = Application.builder().token(token).build()
-
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("status", status))
-    application.add_handler(CommandHandler("restart", restart))
-    application.add_handler(CommandHandler("restart_vpn", restart_vpn))
-    application.add_handler(CommandHandler("fix", fix))
-    application.add_handler(CommandHandler("clients", clients))
-
-    # Add callback handler for refresh button
-    application.add_handler(
-        CallbackQueryHandler(refresh_status_callback, pattern="^refresh_status$")
-    )
-
-    # Add error handler
-    application.add_error_handler(error_handler)
-
-    # Start the bot
-    logger.info("Starting Telegram Bot...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
+    logger.info("Bot is starting...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()

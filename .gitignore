@@ -41,3 +41,6 @@ coverage/
 htmlcov/
 .coverage
 .gradle/
+backup/
+*.log
+.env
