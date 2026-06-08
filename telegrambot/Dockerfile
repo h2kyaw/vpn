@@ -6,6 +6,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     sudo \
     curl \
+    iproute2 \
+    iptables \
+    hostapd \
+    dnsmasq \
+    wireless-tools \
+    iw \
+    network-manager \
+    systemd \
+    dnsutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
