@@ -171,8 +171,19 @@ def check_vpn_external_ip() -> tuple[bool, str]:
 
 
 def check_internet() -> bool:
-    ok, _, _ = run_args(["ping", "-c", "2", "-W", "3", CONFIG["ping_target"]])
-    return ok
+    # Try multiple targets and interfaces to ensure robustness in Docker
+    targets = [CONFIG["ping_target"], "1.1.1.1", "8.8.4.4"]
+    for target in targets:
+        # Use -I tun0 if VPN is active, otherwise let kernel route
+        vpn_ok, _, _ = run_args(["ip", "-4", "addr", "show", "tun0"])
+        if vpn_ok:
+            ok, _, _ = run_args(["ping", "-c", "2", "-W", "3", "-I", "tun0", target])
+        else:
+            ok, _, _ = run_args(["ping", "-c", "2", "-W", "3", target])
+        
+        if ok:
+            return True
+    return False
 
 
 def check_dns() -> bool:
@@ -182,7 +193,18 @@ def check_dns() -> bool:
 
 def check_ping(target: Optional[str] = None) -> PingStatus:
     target = target or CONFIG["ping_target"]
-    ok, out, _ = run_args(["ping", "-c", "3", "-W", "2", target])
+    
+    # Try with tun0 interface first if VPN is active, then fallback to default routing
+    vpn_ok, _, _ = run_args(["ip", "-4", "addr", "show", "tun0"])
+    
+    if vpn_ok:
+        ok, out, _ = run_args(["ping", "-c", "3", "-W", "2", "-I", "tun0", target])
+        if not ok:
+            # Fallback to default routing if tun0 ping fails
+            ok, out, _ = run_args(["ping", "-c", "3", "-W", "2", target])
+    else:
+        ok, out, _ = run_args(["ping", "-c", "3", "-W", "2", target])
+    
     packet_line = "No ping result"
     rtt_line = ""
     for line in out.splitlines():
