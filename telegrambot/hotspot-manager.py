@@ -71,7 +71,8 @@ CUSTOM_EMOJIS = {
     "lock": '<tg-emoji emoji-id="6059947491695008618">🔒</tg-emoji>',        # 🔒 အစား
     "stats": '<tg-emoji emoji-id="6143449494244563627">📶</tg-emoji>',       # 📶 အစား (📊)
     "globe": '<tg-emoji emoji-id="6057443049020071219">🌐</tg-emoji>',       # 🌐 အစား
-    "cross": '<tg-emoji emoji-id="6111658378247806635">❌</tg-emoji>'        # ❌ အစား
+    "cross": '<tg-emoji emoji-id="6111658378247806635">❌</tg-emoji>',       # ❌ အစား
+    "ping": '<tg-emoji emoji-id="6060045064762039982">⏲</tg-emoji>',        # ⏲ အစား (ping အတွက် signal emoji ကို reuse)
 }
 
 # အဆင်ပြေအောင် Short variable names ထပ်သတ်မှတ်နိုင်ပါတယ် (Optional)
@@ -82,6 +83,7 @@ EMOJI_LOCK = CUSTOM_EMOJIS["lock"]
 EMOJI_STATS = CUSTOM_EMOJIS["stats"]
 EMOJI_GLOBE = CUSTOM_EMOJIS["globe"]
 EMOJI_CROSS = CUSTOM_EMOJIS["cross"]
+EMOJI_PING = CUSTOM_EMOJIS["ping"]
 
 class Colors:
     GREEN = "\033[92m"
@@ -357,26 +359,28 @@ def print_status(status: HotspotStatus, telegram_format: bool = False, html_form
     # --- Emoji Selection Logic ---
     # Terminal mode မှာတော့ မူလ Unicode ကိုသုံးပြီး၊ Telegram/HTML မှာတော့ Custom Emoji ကိုသုံးမည်
     if telegram_format or html_format:
-        ICON_OK = EMOJI_CHECK
-        ICON_FAIL = EMOJI_CROSS
-        ICON_SIGNAL = EMOJI_SIGNAL
-        ICON_TOOLS = EMOJI_TOOLS
-        ICON_LOCK = EMOJI_LOCK
-        ICON_STATS = EMOJI_STATS
-        ICON_GLOBE = EMOJI_GLOBE
+        icon_ok = EMOJI_CHECK
+        icon_fail = EMOJI_CROSS
+        icon_signal = EMOJI_SIGNAL
+        icon_tools = EMOJI_TOOLS
+        icon_lock = EMOJI_LOCK
+        icon_stats = EMOJI_STATS
+        icon_globe = EMOJI_GLOBE
+        icon_ping = EMOJI_PING
     else:
-        ICON_OK = "✅"
-        ICON_FAIL = "❌"
-        ICON_SIGNAL = "📡"
-        ICON_TOOLS = "🔧"
-        ICON_LOCK = "🔒"
-        ICON_STATS = "📶"
-        ICON_GLOBE = "🌐"
+        icon_ok = "✅"
+        icon_fail = "❌"
+        icon_signal = "📡"
+        icon_tools = "🔧"
+        icon_lock = "🔒"
+        icon_stats = "📶"
+        icon_globe = "🌐"
+        icon_ping = "⏲"
     # -----------------------------
     
     # Header - Clean UI without ASCII borders for Telegram
     if telegram_format or html_format:
-        lines.append(fmt_bold(f"{ICON_SIGNAL} HOTSPOT STATUS"))
+        lines.append(fmt_bold(f"{icon_signal} HOTSPOT STATUS"))
         lines.append("")
     else:
         lines.append("\n" + "=" * 55)
@@ -385,12 +389,12 @@ def print_status(status: HotspotStatus, telegram_format: bool = False, html_form
 
     # Services Section
     if telegram_format or html_format:
-        lines.append(fmt_bold(f"{ICON_TOOLS} SERVICES:"))
+        lines.append(fmt_bold(f"{icon_tools} SERVICES:"))
     else:
         lines.append(f"\n{Colors.BOLD}SERVICES:{Colors.RESET}")
 
     for service, ok in status["services"].items():
-        icon = ICON_OK if ok else ICON_FAIL
+        icon = icon_ok if ok else icon_fail
         state = "Running" if ok else "Stopped"
         if telegram_format or html_format:
             lines.append(f"{icon} {fmt_code(service)}: {state}")
@@ -400,11 +404,11 @@ def print_status(status: HotspotStatus, telegram_format: bool = False, html_form
     # VPN Section
     if telegram_format or html_format:
         lines.append("")
-        lines.append(fmt_bold(f"{ICON_LOCK} VPN:"))
+        lines.append(fmt_bold(f"{icon_lock} VPN:"))
     else:
         lines.append(f"\n{Colors.BOLD}VPN:{Colors.RESET}")
 
-    icon = ICON_OK if status["vpn"]["connected"] else ICON_FAIL
+    icon = icon_ok if status["vpn"]["connected"] else icon_fail
     if telegram_format or html_format:
         lines.append(f"{icon} Connected: {fmt_code(str(status['vpn']['connected']))}")
     else:
@@ -431,11 +435,11 @@ def print_status(status: HotspotStatus, telegram_format: bool = False, html_form
     # Hotspot Section
     if telegram_format or html_format:
         lines.append("")
-        lines.append(fmt_bold(f"{ICON_STATS} HOTSPOT:"))
+        lines.append(fmt_bold(f"{icon_stats} HOTSPOT:"))
     else:
         lines.append(f"\n{Colors.BOLD}HOTSPOT:{Colors.RESET}")
         
-    icon = ICON_OK if status["hotspot"]["broadcasting"] else ICON_FAIL
+    icon = icon_ok if status["hotspot"]["broadcasting"] else icon_fail
     ssid = get_hotspot_ssid()
     if telegram_format or html_format:
         lines.append(f"{icon} SSID: {fmt_code(ssid)}")
@@ -447,18 +451,18 @@ def print_status(status: HotspotStatus, telegram_format: bool = False, html_form
     # Network Section
     if telegram_format or html_format:
         lines.append("")
-        lines.append(fmt_bold(f"{ICON_GLOBE} NETWORK:"))
+        lines.append(fmt_bold(f"{icon_globe} NETWORK:"))
     else:
         lines.append(f"\n{Colors.BOLD}NETWORK:{Colors.RESET}")
         
-    dns_icon = ICON_OK if status["dns_working"] else ICON_FAIL
+    dns_icon = icon_ok if status["dns_working"] else icon_fail
     dns_state = "Working" if status["dns_working"] else "Failed"
     if telegram_format or html_format:
         lines.append(f"{dns_icon} DNS: {fmt_code(dns_state)}")
     else:
         lines.append(f"  {dns_icon} DNS: {'Working' if status['dns_working'] else 'Failed'}")
 
-    internet_icon = ICON_OK if status["internet"] else ICON_FAIL
+    internet_icon = icon_ok if status["internet"] else icon_fail
     internet_state = "Available" if status["internet"] else "Down"
     if telegram_format or html_format:
         lines.append(f"{internet_icon} Internet: {fmt_code(internet_state)}")
@@ -466,7 +470,7 @@ def print_status(status: HotspotStatus, telegram_format: bool = False, html_form
         lines.append(f"  {internet_icon} Internet: {internet_state}")
 
     ping = status.get("ping", {})
-    ping_icon = ICON_OK if ping.get("ok") else ICON_FAIL
+    ping_icon = icon_ping if ping.get("ok") else icon_fail
     ping_target = ping.get("target", CONFIG["ping_target"])
     ping_summary = ping.get("summary", "No ping result")
     
